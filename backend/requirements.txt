@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+websockets
+python-dotenv
+loguru
+pipecat-ai[openai,silero]
+protobuf
+supermemory-pipecat>=0.1.0
