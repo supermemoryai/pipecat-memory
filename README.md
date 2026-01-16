@@ -1,22 +1,24 @@
-# Supermemory x Pipecat
+
+<img width="590" height="98" alt="Screenshot 2026-01-15 at 5 49 27 PM" src="https://github.com/user-attachments/assets/87e590e3-d372-4d0a-ad27-5b76b4cfeccf" />
+
 
 Voice assistant with persistent memory powered by [Supermemory](https://supermemory.ai) and [Pipecat](https://pipecat.ai).
 
 ## Quick Start
 
 ```bash
-bun install && cd backend && pip install -r requirements.txt
+bun i && bun run setup:backend
 ```
 
 ```bash
 # backend/.env
-OPENAI_API_KEY=sk-...
-SUPERMEMORY_API_KEY=sm-...
+OPENAI_API_KEY=
+SUPERMEMORY_API_KEY=
 ```
 
 ```bash
-bun run start:backend  # Terminal 1
-bun run dev            # Terminal 2
+bun run dev:backend
+bun run dev            
 ```
 
 ## Pipecat Memory Integration
