@@ -53,7 +53,12 @@
 		"enabled": true,
 		"rules": {
 			"a11y": {
-				"useValidAnchor": "warn"
+				"useValidAnchor": "warn",
+				"noStaticElementInteractions": "warn",
+				"useMediaCaption": "warn"
+			},
+			"suspicious": {
+				"noExplicitAny": "warn"
 			},
 			"correctness": {
 				"useYield": "warn",
