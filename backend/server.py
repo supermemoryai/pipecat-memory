@@ -1,11 +1,3 @@
-"""
-Pipecat + Supermemory Voice Bot Server
-
-This server uses Supermemory for memory storage.
-Works with the official @pipecat-ai/client-js SDK.
-Supports multiple users via query params.
-"""
-
 import os
 import sys
 import uuid
@@ -14,12 +6,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from google.genai import types
 from google.genai.types import EndSensitivity, StartSensitivity
 from loguru import logger
-from pipecat.audio.interruptions.min_words_interruption_strategy import (
-    MinWordsInterruptionStrategy,
-)
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMMessagesFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -27,33 +15,23 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
 )
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frameworks.rtvi import (
     RTVIConfig,
     RTVIObserver,
-    RTVIObserverParams,
     RTVIProcessor,
 )
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.google.gemini_live.llm import (
-    GeminiLiveContext,
     GeminiLiveLLMService,
     GeminiVADParams,
     InputParams,
 )
-from pipecat.services.google.google import LLMContext
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
-from pipecat.turns.user_start.external_user_turn_start_strategy import (
-    ExternalUserTurnStartStrategy,
-)
-from pipecat.turns.user_stop.external_user_turn_stop_strategy import (
-    ExternalUserTurnStopStrategy,
-)
-from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from supermemory_pipecat import SupermemoryPipecatService
 
 load_dotenv(override=True)
@@ -63,7 +41,6 @@ logger.add(sys.stderr, level="DEBUG")
 
 app = FastAPI(title="Pipecat + Supermemory Voice Bot")
 
-# Get allowed origins from env or default to all
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
 app.add_middleware(
@@ -81,8 +58,6 @@ Your output will be converted to audio so don't include special characters. Ask 
 
 
 async def run_bot(websocket_client, user_id: str, session_id: str):
-    """Run the voice bot pipeline with Supermemory for a specific user."""
-
     logger.info(f"Starting bot for user: {user_id}, session: {session_id}")
 
     transport = FastAPIWebsocketTransport(
@@ -106,21 +81,18 @@ async def run_bot(websocket_client, user_id: str, session_id: str):
         api_key=gemini_api_key,
         voice_id="Puck",
         system_instruction=SYSTEM_PROMPT,
-        transcribe_user_audio=True,
-        transcribe_model_audio=True,
         inference_on_context_initialization=True,
         params=InputParams(
             vad=GeminiVADParams(
                 disabled=False,
-                start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,  # Detect speech quickly
-                end_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,  # Allow longer pauses
-                prefix_padding_ms=300,  # Keep 300ms before speech
-                silence_duration_ms=500,  # Allow longer pauses
+                start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
+                end_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
+                prefix_padding_ms=300,
+                silence_duration_ms=500,
             ),
         ),
     )
 
-    # Supermemory service with user-specific context
     memory = SupermemoryPipecatService(
         api_key=os.getenv("SUPERMEMORY_API_KEY"),
         user_id=user_id,
@@ -133,24 +105,17 @@ async def run_bot(websocket_client, user_id: str, session_id: str):
     )
 
     context = LLMContext([{"role": "system", "content": SYSTEM_PROMPT}])
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(
-            user_turn_strategies=UserTurnStrategies(
-                start=[ExternalUserTurnStartStrategy()],
-                stop=[ExternalUserTurnStopStrategy()],
-            ),
-        ),
-    )
     rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
+    # Pipeline: RTVI before output transport for proper client communication
     pipeline = Pipeline(
         [
             transport.input(),
-            memory,
             rtvi,
             user_aggregator,
+            memory,  # Memory receives context frames with user messages
             llm,
             transport.output(),
             assistant_aggregator,
@@ -164,20 +129,7 @@ async def run_bot(websocket_client, user_id: str, session_id: str):
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
-        observers=[
-            RTVIObserver(
-                rtvi,
-                params=RTVIObserverParams(
-                    bot_tts_enabled=True,
-                    bot_llm_enabled=True,
-                    bot_output_enabled=True,
-                    bot_speaking_enabled=True,
-                    user_transcription_enabled=True,
-                    user_speaking_enabled=True,
-                ),
-            )
-        ],
-        enable_turn_tracking=True,
+        observers=[RTVIObserver(rtvi)],
     )
 
     @rtvi.event_handler("on_client_ready")
@@ -216,19 +168,12 @@ async def connect(
     userId: str = Query(None),
     sessionId: str = Query(None),
 ):
-    """
-    Client calls this to get WebSocket connection info.
-    Pass userId and sessionId to maintain user context.
-    """
-    # Generate IDs if not provided
     user_id = userId or f"user-{uuid.uuid4().hex[:12]}"
     session_id = sessionId or f"session-{uuid.uuid4().hex[:8]}"
 
-    # Get the host from request or use env
     ws_host = os.getenv("WS_HOST", request.headers.get("host", "localhost:8001"))
     ws_protocol = "wss" if os.getenv("USE_SSL", "false").lower() == "true" else "ws"
 
-    # Pipecat client only expects wsUrl in response - embed userId/sessionId in URL
     return JSONResponse(
         {
             "wsUrl": f"{ws_protocol}://{ws_host}/ws?userId={user_id}&sessionId={session_id}",
@@ -244,7 +189,6 @@ async def websocket_endpoint(
 ):
     await websocket.accept()
 
-    # Generate IDs if not provided
     user_id = userId or f"user-{uuid.uuid4().hex[:12]}"
     session_id = sessionId or f"session-{uuid.uuid4().hex[:8]}"
 

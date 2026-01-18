@@ -145,6 +145,8 @@ export default function VoiceApp() {
 	const clientRef = useRef<PipecatClient | null>(null)
 	const audioRef = useRef<HTMLAudioElement | null>(null)
 	const messagesEndRef = useRef<HTMLDivElement | null>(null)
+	const ttsBufferRef = useRef<string>("")  // Buffer for TTS text chunks
+	const lastBotMessageIndexRef = useRef<number>(-1)  // Track last bot message for updating
 
 	// Inject memory-graph styles once
 	useEffect(() => {
@@ -346,13 +348,41 @@ export default function VoiceApp() {
 					},
 					onUserTranscript: (data) => {
 						if (data.final) {
+							// Reset TTS buffer for new response
+							ttsBufferRef.current = ""
+							lastBotMessageIndexRef.current = -1
+
 							addTranscript("user", data.text)
 							// Refresh memories after user speaks
 							setTimeout(() => fetchMemories(), 3000)
 						}
 					},
-					onBotTranscript: (data) => {
-						addTranscript("bot", data.text)
+					onBotTtsText: (data) => {
+						// Accumulate TTS chunks and update single bot message
+						const chunk = data.text || ""
+						ttsBufferRef.current += chunk
+
+						setTranscripts(prev => {
+							const newTranscripts = [...prev]
+
+							if (lastBotMessageIndexRef.current >= 0 && lastBotMessageIndexRef.current < newTranscripts.length) {
+								// Update existing bot message
+								newTranscripts[lastBotMessageIndexRef.current] = {
+									...newTranscripts[lastBotMessageIndexRef.current],
+									text: ttsBufferRef.current
+								}
+							} else {
+								// Add new bot message
+								lastBotMessageIndexRef.current = newTranscripts.length
+								newTranscripts.push({
+									role: "bot",
+									text: ttsBufferRef.current,
+									timestamp: new Date()
+								})
+							}
+
+							return newTranscripts
+						})
 					},
 					onError: (err) => {
 						console.error("Client error:", err)
