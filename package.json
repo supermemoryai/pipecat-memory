@@ -16,8 +16,7 @@
     "test": "vitest",
     "types": "wrangler types env.d.ts --include-runtime false",
     "format": "prettier --write .",
-    "check": "prettier . --check && biome lint && tsc",
-    "postinstall": "patch-package"
+    "check": "prettier . --check && biome lint && tsc"
   },
   "keywords": [
     "cloudflare",
@@ -37,7 +36,6 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
     "drizzle-kit": "^0.31.8",
-    "patch-package": "^8.0.1",
     "prettier": "^3.7.4",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
