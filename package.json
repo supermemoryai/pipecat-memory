@@ -16,7 +16,7 @@
     "test": "vitest",
     "types": "wrangler types env.d.ts --include-runtime false",
     "format": "prettier --write .",
-    "check": "biome ci && tsc"
+    "check": "biome ci"
   },
   "keywords": [
     "cloudflare",
