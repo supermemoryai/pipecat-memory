@@ -93,7 +93,11 @@ export default {
 
 					if (!response.ok) {
 						const errorText = await response.text()
-						console.error("Supermemory search API error:", response.status, errorText)
+						console.error(
+							"Supermemory search API error:",
+							response.status,
+							errorText,
+						)
 						return Response.json(
 							{ error: `API error: ${response.status}` },
 							{ status: response.status },
@@ -136,7 +140,11 @@ export default {
 
 				if (!listResponse.ok) {
 					const errorText = await listResponse.text()
-					console.error("Supermemory list API error:", listResponse.status, errorText)
+					console.error(
+						"Supermemory list API error:",
+						listResponse.status,
+						errorText,
+					)
 					return Response.json(
 						{ error: `API error: ${listResponse.status}` },
 						{ status: listResponse.status },
@@ -222,7 +230,10 @@ export default {
 
 				if (!listResponse.ok) {
 					// Return error without profile data - let client preserve existing data
-					return Response.json({ error: `API error: ${listResponse.status}` }, { status: listResponse.status })
+					return Response.json(
+						{ error: `API error: ${listResponse.status}` },
+						{ status: listResponse.status },
+					)
 				}
 
 				const listData = await listResponse.json()
@@ -251,7 +262,11 @@ export default {
 							const memories = docData.memories || []
 
 							for (const mem of memories) {
-								if (mem.memory && !mem.isForgotten && !seenMemories.has(mem.memory)) {
+								if (
+									mem.memory &&
+									!mem.isForgotten &&
+									!seenMemories.has(mem.memory)
+								) {
 									seenMemories.add(mem.memory)
 									if (mem.isStatic) {
 										staticMemories.push(mem.memory)
@@ -261,7 +276,7 @@ export default {
 								}
 							}
 						}
-					} catch (e) {
+					} catch (_e) {
 						// Skip failed document fetches
 					}
 				}
@@ -270,12 +285,15 @@ export default {
 					profile: {
 						static: staticMemories,
 						dynamic: dynamicMemories.slice(0, 10), // Limit session to recent 10
-					}
+					},
 				})
 			} catch (error: any) {
 				console.error("Profile fetch error:", error)
 				// Return error without profile data - let client preserve existing data
-				return Response.json({ error: error.message || "Profile fetch error" }, { status: 500 })
+				return Response.json(
+					{ error: error.message || "Profile fetch error" },
+					{ status: 500 },
+				)
 			}
 		}
 
@@ -300,24 +318,31 @@ export default {
 				const page = Number.parseInt(url.searchParams.get("page") || "1")
 				const limit = Number.parseInt(url.searchParams.get("limit") || "100")
 
-				const response = await fetch(`${SUPERMEMORY_BASE_URL}/v3/documents/documents`, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						Authorization: `Bearer ${apiKey}`,
+				const response = await fetch(
+					`${SUPERMEMORY_BASE_URL}/v3/documents/documents`,
+					{
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							Authorization: `Bearer ${apiKey}`,
+						},
+						body: JSON.stringify({
+							page,
+							limit,
+							sort: "createdAt",
+							order: "desc",
+							containerTags: [userId],
+						}),
 					},
-					body: JSON.stringify({
-						page,
-						limit,
-						sort: "createdAt",
-						order: "desc",
-						containerTags: [userId],
-					}),
-				})
+				)
 
 				if (!response.ok) {
 					const errorText = await response.text()
-					console.error("Supermemory documents API error:", response.status, errorText)
+					console.error(
+						"Supermemory documents API error:",
+						response.status,
+						errorText,
+					)
 					return Response.json(
 						{ error: `API error: ${response.status}` },
 						{ status: response.status },
@@ -333,7 +358,10 @@ export default {
 
 		// Health check
 		if (url.pathname === "/health") {
-			return Response.json({ status: "ok", service: "pipecat-supermemory-demo" })
+			return Response.json({
+				status: "ok",
+				service: "pipecat-supermemory-demo",
+			})
 		}
 
 		// For all other routes, return 404 (static assets are served by Cloudflare)

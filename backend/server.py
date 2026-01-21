@@ -1,37 +1,37 @@
-"""
-Pipecat + Supermemory Voice Bot Server
-
-This server uses Supermemory for memory storage.
-Works with the official @pipecat-ai/client-js SDK.
-Supports multiple users via query params.
-"""
-
 import os
 import sys
 import uuid
-from dotenv import load_dotenv
-from loguru import logger
 
-from fastapi import FastAPI, WebSocket, Request, Query
+from dotenv import load_dotenv
+from fastapi import FastAPI, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
+from google.genai.types import EndSensitivity, StartSensitivity
+from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMMessagesFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIObserver, RTVIProcessor
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+)
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.frameworks.rtvi import (
+    RTVIConfig,
+    RTVIObserver,
+    RTVIProcessor,
+)
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
-from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.services.openai.tts import OpenAITTSService
-from pipecat.services.openai.stt import OpenAISTTService
+from pipecat.services.google.gemini_live.llm import (
+    GeminiLiveLLMService,
+    GeminiVADParams,
+    InputParams,
+)
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
-
 from supermemory_pipecat import SupermemoryPipecatService
 
 load_dotenv(override=True)
@@ -41,7 +41,6 @@ logger.add(sys.stderr, level="DEBUG")
 
 app = FastAPI(title="Pipecat + Supermemory Voice Bot")
 
-# Get allowed origins from env or default to all
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
 app.add_middleware(
@@ -55,12 +54,10 @@ app.add_middleware(
 SYSTEM_PROMPT = """You are a helpful voice assistant with memory capabilities.
 You remember information from past conversations and use it to provide personalized responses.
 Keep your responses brief and conversational - one or two sentences at most.
-Your output will be converted to audio so don't include special characters."""
+Your output will be converted to audio so don't include special characters. Ask for their name and greet them. Only speak when you need to. When giving an introduction, just say something along the lines of 'I am a memory assistant powered by supermemory'. What's your name? (don't ask the name if you already know it but you get the point)"""
 
 
 async def run_bot(websocket_client, user_id: str, session_id: str):
-    """Run the voice bot pipeline with Supermemory for a specific user."""
-
     logger.info(f"Starting bot for user: {user_id}, session: {session_id}")
 
     transport = FastAPIWebsocketTransport(
@@ -76,21 +73,26 @@ async def run_bot(websocket_client, user_id: str, session_id: str):
         ),
     )
 
-    stt = OpenAISTTService(
-        api_key=os.getenv("OPENAI_API_KEY"),
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_api_key:
+        raise ValueError("GEMINI_API_KEY is not set")
+
+    llm = GeminiLiveLLMService(
+        api_key=gemini_api_key,
+        voice_id="Puck",
+        system_instruction=SYSTEM_PROMPT,
+        inference_on_context_initialization=True,
+        params=InputParams(
+            vad=GeminiVADParams(
+                disabled=False,
+                start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
+                end_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
+                prefix_padding_ms=300,
+                silence_duration_ms=500,
+            ),
+        ),
     )
 
-    llm = OpenAILLMService(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        model="gpt-4o-mini",
-    )
-
-    tts = OpenAITTSService(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        voice="alloy",
-    )
-
-    # Supermemory service with user-specific context
     memory = SupermemoryPipecatService(
         api_key=os.getenv("SUPERMEMORY_API_KEY"),
         user_id=user_id,
@@ -99,32 +101,24 @@ async def run_bot(websocket_client, user_id: str, session_id: str):
             search_limit=10,
             search_threshold=0.1,
             mode="full",
-            add_memory="always",
         ),
     )
 
-    messages = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT,
-        },
-    ]
-    context = OpenAILLMContext(messages)
-    context_aggregator = llm.create_context_aggregator(context)
+    context = LLMContext([{"role": "system", "content": SYSTEM_PROMPT}])
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
     rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
+    # Pipeline: RTVI before output transport for proper client communication
     pipeline = Pipeline(
         [
             transport.input(),
-            stt,
             rtvi,
-            context_aggregator.user(),
-            memory,
+            user_aggregator,
+            memory,  # Memory receives context frames with user messages
             llm,
-            tts,
             transport.output(),
-            context_aggregator.assistant(),
+            assistant_aggregator,
         ]
     )
 
@@ -142,11 +136,18 @@ async def run_bot(websocket_client, user_id: str, session_id: str):
     async def on_client_ready(rtvi):
         logger.info(f"Client ready for user: {user_id}")
         await rtvi.set_bot_ready()
-        await task.queue_frames([
-            LLMMessagesFrame([
-                {"role": "system", "content": "Greet the user warmly and briefly introduce yourself as a memory-enabled assistant."}
-            ])
-        ])
+        await task.queue_frames(
+            [
+                LLMMessagesFrame(
+                    [
+                        {
+                            "role": "system",
+                            "content": "Greet the user warmly and ask them a question (like their name) don't say much please.",
+                        }
+                    ]
+                )
+            ]
+        )
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
@@ -167,22 +168,17 @@ async def connect(
     userId: str = Query(None),
     sessionId: str = Query(None),
 ):
-    """
-    Client calls this to get WebSocket connection info.
-    Pass userId and sessionId to maintain user context.
-    """
-    # Generate IDs if not provided
     user_id = userId or f"user-{uuid.uuid4().hex[:12]}"
     session_id = sessionId or f"session-{uuid.uuid4().hex[:8]}"
 
-    # Get the host from request or use env
     ws_host = os.getenv("WS_HOST", request.headers.get("host", "localhost:8001"))
     ws_protocol = "wss" if os.getenv("USE_SSL", "false").lower() == "true" else "ws"
 
-    # Pipecat client only expects wsUrl in response - embed userId/sessionId in URL
-    return JSONResponse({
-        "wsUrl": f"{ws_protocol}://{ws_host}/ws?userId={user_id}&sessionId={session_id}",
-    })
+    return JSONResponse(
+        {
+            "wsUrl": f"{ws_protocol}://{ws_host}/ws?userId={user_id}&sessionId={session_id}",
+        }
+    )
 
 
 @app.websocket("/ws")
@@ -193,7 +189,6 @@ async def websocket_endpoint(
 ):
     await websocket.accept()
 
-    # Generate IDs if not provided
     user_id = userId or f"user-{uuid.uuid4().hex[:12]}"
     session_id = sessionId or f"session-{uuid.uuid4().hex[:8]}"
 

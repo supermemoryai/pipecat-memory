@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react"
 import { PipecatClient, RTVIEvent } from "@pipecat-ai/client-js"
 import { WebSocketTransport } from "@pipecat-ai/websocket-transport"
 import {
 	type DocumentWithMemories,
-	MemoryGraph,
 	injectStyles,
+	MemoryGraph,
 } from "@supermemory/memory-graph"
+import { useCallback, useEffect, useRef, useState } from "react"
 import "./voice.css"
 
 // Backend URL - configurable via env
@@ -97,7 +97,6 @@ interface TranscriptEntry {
 	timestamp: Date
 }
 
-
 export default function VoiceApp() {
 	// Generate userId on first load (persists in localStorage)
 	const [userId] = useState(() => {
@@ -117,7 +116,7 @@ export default function VoiceApp() {
 	const [isConnected, setIsConnected] = useState(false)
 	const [isConnecting, setIsConnecting] = useState(false)
 	const [isBotReady, setIsBotReady] = useState(false)
-	const [isBotSpeaking, setIsBotSpeaking] = useState(false)
+	const [_isBotSpeaking, setIsBotSpeaking] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 
 	// Transcript
@@ -129,7 +128,9 @@ export default function VoiceApp() {
 	const [searchQuery, setSearchQuery] = useState("")
 
 	// Graph documents
-	const [documentsData, setDocumentsData] = useState<{ documents: DocumentWithMemories[] } | null>(null)
+	const [documentsData, setDocumentsData] = useState<{
+		documents: DocumentWithMemories[]
+	} | null>(null)
 	const [isLoadingGraph, setIsLoadingGraph] = useState(false)
 
 	// Profile data
@@ -145,6 +146,8 @@ export default function VoiceApp() {
 	const clientRef = useRef<PipecatClient | null>(null)
 	const audioRef = useRef<HTMLAudioElement | null>(null)
 	const messagesEndRef = useRef<HTMLDivElement | null>(null)
+	const ttsBufferRef = useRef<string>("") // Buffer for TTS text chunks
+	const lastBotMessageIndexRef = useRef<number>(-1) // Track last bot message for updating
 
 	// Inject memory-graph styles once
 	useEffect(() => {
@@ -154,7 +157,7 @@ export default function VoiceApp() {
 	// Auto-scroll messages
 	useEffect(() => {
 		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-	}, [transcripts])
+	}, [])
 
 	const addTranscript = useCallback((role: "user" | "bot", text: string) => {
 		setTranscripts((prev) => [...prev, { role, text, timestamp: new Date() }])
@@ -184,7 +187,12 @@ export default function VoiceApp() {
 				const data = await response.json()
 
 				// Only update if we got valid data (no error field, and memories array exists)
-				if (!data.error && data.memories && Array.isArray(data.memories) && data.memories.length > 0) {
+				if (
+					!data.error &&
+					data.memories &&
+					Array.isArray(data.memories) &&
+					data.memories.length > 0
+				) {
 					setMemories(data.memories)
 				}
 			} catch (err) {
@@ -197,79 +205,82 @@ export default function VoiceApp() {
 	)
 
 	// Fetch profile data from Supermemory API (preserves data on error)
-	const fetchProfile = useCallback(
-		async () => {
-			try {
-				const response = await fetch(`/api/profile?userId=${userId}`)
-				if (!response.ok) return // Don't clear data on error
-				const data = await response.json()
-				// Only update if we got valid profile data (no error field)
-				if (!data.error && data.profile) {
-					setProfileData(data)
-				}
-			} catch (err) {
-				console.error("Failed to fetch profile:", err)
-				// Don't clear data on error
+	const fetchProfile = useCallback(async () => {
+		try {
+			const response = await fetch(`/api/profile?userId=${userId}`)
+			if (!response.ok) return // Don't clear data on error
+			const data = await response.json()
+			// Only update if we got valid profile data (no error field)
+			if (!data.error && data.profile) {
+				setProfileData(data)
 			}
-		},
-		[userId],
-	)
+		} catch (err) {
+			console.error("Failed to fetch profile:", err)
+			// Don't clear data on error
+		}
+	}, [userId])
 
 	// Fetch session documents (preserves data on error)
-	const fetchSessionDocs = useCallback(
-		async () => {
-			try {
-				const response = await fetch(`/api/documents?userId=${userId}&page=1&limit=10`)
-				if (!response.ok) return // Don't clear data on error
-				const data = await response.json()
-				// Only update if we got valid documents (no error field)
-				if (!data.error && data.documents && Array.isArray(data.documents) && data.documents.length > 0) {
-					const docs = data.documents.map((doc: any) => ({
-						id: doc.id,
-						title: doc.title || "Untitled Session",
-						summary: doc.summary || "",
-						createdAt: doc.createdAt || new Date().toISOString(),
-					}))
-					setSessionDocs(docs)
-				}
-			} catch (err) {
-				console.error("Failed to fetch session docs:", err)
-				// Don't clear data on error
+	const fetchSessionDocs = useCallback(async () => {
+		try {
+			const response = await fetch(
+				`/api/documents?userId=${userId}&page=1&limit=10`,
+			)
+			if (!response.ok) return // Don't clear data on error
+			const data = await response.json()
+			// Only update if we got valid documents (no error field)
+			if (
+				!data.error &&
+				data.documents &&
+				Array.isArray(data.documents) &&
+				data.documents.length > 0
+			) {
+				const docs = data.documents.map((doc: any) => ({
+					id: doc.id,
+					title: doc.title || "Untitled Session",
+					summary: doc.summary || "",
+					createdAt: doc.createdAt || new Date().toISOString(),
+				}))
+				setSessionDocs(docs)
 			}
-		},
-		[userId],
-	)
+		} catch (err) {
+			console.error("Failed to fetch session docs:", err)
+			// Don't clear data on error
+		}
+	}, [userId])
 
 	// Fetch documents for memory graph (preserves data on error)
-	const fetchDocuments = useCallback(
-		async () => {
-			// Only show loading spinner on first load when no data exists
-			const isFirstLoad = !documentsData
-			if (isFirstLoad) setIsLoadingGraph(true)
+	const fetchDocuments = useCallback(async () => {
+		// Only show loading spinner on first load when no data exists
+		const isFirstLoad = !documentsData
+		if (isFirstLoad) setIsLoadingGraph(true)
 
-			try {
-				const response = await fetch(
-					`/api/documents?userId=${userId}&page=1&limit=100`,
-				)
-				if (!response.ok) {
-					// Don't clear data on error
-					if (isFirstLoad) setIsLoadingGraph(false)
-					return
-				}
-				const data = await response.json()
-				// Only update if we got valid data (no error field)
-				if (!data.error && data.documents && Array.isArray(data.documents) && data.documents.length > 0) {
-					setDocumentsData(data)
-				}
-			} catch (err) {
-				console.error("Failed to fetch documents:", err)
+		try {
+			const response = await fetch(
+				`/api/documents?userId=${userId}&page=1&limit=100`,
+			)
+			if (!response.ok) {
 				// Don't clear data on error
+				if (isFirstLoad) setIsLoadingGraph(false)
+				return
 			}
+			const data = await response.json()
+			// Only update if we got valid data (no error field)
+			if (
+				!data.error &&
+				data.documents &&
+				Array.isArray(data.documents) &&
+				data.documents.length > 0
+			) {
+				setDocumentsData(data)
+			}
+		} catch (err) {
+			console.error("Failed to fetch documents:", err)
+			// Don't clear data on error
+		}
 
-			if (isFirstLoad) setIsLoadingGraph(false)
-		},
-		[userId, documentsData],
-	)
+		if (isFirstLoad) setIsLoadingGraph(false)
+	}, [userId, documentsData])
 
 	// Auto-refresh graph every 10 seconds when graph tab is active
 	useEffect(() => {
@@ -308,7 +319,14 @@ export default function VoiceApp() {
 			clearInterval(profileInterval)
 			clearInterval(sessionInterval)
 		}
-	}, [hasEverStarted, activeTab, fetchProfile, fetchSessionDocs, fetchMemories, searchQuery])
+	}, [
+		hasEverStarted,
+		activeTab,
+		fetchProfile,
+		fetchSessionDocs,
+		fetchMemories,
+		searchQuery,
+	])
 
 	// Start conversation
 	const startConversation = useCallback(async () => {
@@ -346,13 +364,44 @@ export default function VoiceApp() {
 					},
 					onUserTranscript: (data) => {
 						if (data.final) {
+							// Reset TTS buffer for new response
+							ttsBufferRef.current = ""
+							lastBotMessageIndexRef.current = -1
+
 							addTranscript("user", data.text)
 							// Refresh memories after user speaks
 							setTimeout(() => fetchMemories(), 3000)
 						}
 					},
-					onBotTranscript: (data) => {
-						addTranscript("bot", data.text)
+					onBotTtsText: (data) => {
+						// Accumulate TTS chunks and update single bot message
+						const chunk = data.text || ""
+						ttsBufferRef.current += chunk
+
+						setTranscripts((prev) => {
+							const newTranscripts = [...prev]
+
+							if (
+								lastBotMessageIndexRef.current >= 0 &&
+								lastBotMessageIndexRef.current < newTranscripts.length
+							) {
+								// Update existing bot message
+								newTranscripts[lastBotMessageIndexRef.current] = {
+									...newTranscripts[lastBotMessageIndexRef.current],
+									text: ttsBufferRef.current,
+								}
+							} else {
+								// Add new bot message
+								lastBotMessageIndexRef.current = newTranscripts.length
+								newTranscripts.push({
+									role: "bot",
+									text: ttsBufferRef.current,
+									timestamp: new Date(),
+								})
+							}
+
+							return newTranscripts
+						})
 					},
 					onError: (err) => {
 						console.error("Client error:", err)
@@ -375,7 +424,8 @@ export default function VoiceApp() {
 			const connectUrl = `${BACKEND_URL}/connect?userId=${userId}&sessionId=${sessionId}`
 			await client.startBotAndConnect({ endpoint: connectUrl })
 		} catch (err: unknown) {
-			const errorMessage = err instanceof Error ? err.message : "Failed to connect"
+			const errorMessage =
+				err instanceof Error ? err.message : "Failed to connect"
 			console.error("Connection failed:", err)
 			setError(errorMessage)
 			setIsConnecting(false)
@@ -412,7 +462,7 @@ export default function VoiceApp() {
 		}
 	}, [])
 
-	const formatTime = (date: Date) => {
+	const _formatTime = (date: Date) => {
 		return date.toLocaleTimeString("en-US", {
 			hour: "2-digit",
 			minute: "2-digit",
@@ -438,14 +488,14 @@ export default function VoiceApp() {
 	if (!hasEverStarted) {
 		return (
 			<div className="landing-container">
-				<audio ref={audioRef} autoPlay />
+				<audio autoPlay ref={audioRef} />
 				<IntegrationHeader />
 				<div className="start-button-section">
 					<button
-						type="button"
 						className="gradient-circle"
-						onClick={startConversation}
 						disabled={isConnecting}
+						onClick={startConversation}
+						type="button"
 					/>
 					<span className="start-text">[ start conversation ]</span>
 				</div>
@@ -460,7 +510,7 @@ export default function VoiceApp() {
 	// Conversation View
 	return (
 		<div className="app-container">
-			<audio ref={audioRef} autoPlay />
+			<audio autoPlay ref={audioRef} />
 
 			{/* Left Panel */}
 			<div className="left-panel">
@@ -494,12 +544,12 @@ export default function VoiceApp() {
 					</span>
 					{isBotReady && (
 						<button
-							type="button"
 							className="end-btn"
 							onClick={(e) => {
 								e.stopPropagation()
 								endConversation()
 							}}
+							type="button"
 						>
 							End
 						</button>
@@ -514,7 +564,10 @@ export default function VoiceApp() {
 					) : (
 						<>
 							{transcripts.map((entry, i) => (
-								<div key={`transcript-${entry.timestamp.getTime()}-${i}`} className={`message ${entry.role}`}>
+								<div
+									className={`message ${entry.role}`}
+									key={`transcript-${entry.timestamp.getTime()}-${i}`}
+								>
 									<div className="message-role">
 										{entry.role === "user" ? "You" : "AI"}
 									</div>
@@ -533,16 +586,16 @@ export default function VoiceApp() {
 			<div className="right-panel">
 				<div className="tabs-header">
 					<button
-						type="button"
 						className={`tab-button ${activeTab === "context" ? "active" : ""}`}
 						onClick={() => setActiveTab("context")}
+						type="button"
 					>
 						Context
 					</button>
 					<button
-						type="button"
 						className={`tab-button ${activeTab === "graph" ? "active" : ""}`}
 						onClick={() => setActiveTab("graph")}
+						type="button"
 					>
 						Graph
 					</button>
@@ -559,14 +612,18 @@ export default function VoiceApp() {
 
 								<div className="search-bar">
 									<input
-										type="text"
 										className="search-input"
-										value={searchQuery}
 										onChange={(e) => setSearchQuery(e.target.value)}
-										placeholder="Search memories..."
 										onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+										placeholder="Search memories..."
+										type="text"
+										value={searchQuery}
 									/>
-									<button type="button" className="search-btn" onClick={handleSearch}>
+									<button
+										className="search-btn"
+										onClick={handleSearch}
+										type="button"
+									>
 										Search
 									</button>
 								</div>
@@ -584,7 +641,7 @@ export default function VoiceApp() {
 								) : (
 									<div className="memory-list">
 										{memories.map((memory) => (
-											<div key={memory.id} className="memory-card">
+											<div className="memory-card" key={memory.id}>
 												<div className="memory-header">
 													<div className="memory-content">{memory.memory}</div>
 												</div>
@@ -612,36 +669,45 @@ export default function VoiceApp() {
 									</div>
 									<div className="profile-content">
 										{/* Static Facts */}
-										{profileData?.profile.static && profileData.profile.static.length > 0 && (
-											<div className="profile-subsection">
-												<div className="subsection-label">Static</div>
-												<div className="profile-facts">
-													{profileData.profile.static.map((fact, idx) => (
-														<div key={`static-${idx}`} className="profile-fact static">
-															{fact}
-														</div>
-													))}
+										{profileData?.profile.static &&
+											profileData.profile.static.length > 0 && (
+												<div className="profile-subsection">
+													<div className="subsection-label">Static</div>
+													<div className="profile-facts">
+														{profileData.profile.static.map((fact, idx) => (
+															<div
+																className="profile-fact static"
+																key={`static-${idx}`}
+															>
+																{fact}
+															</div>
+														))}
+													</div>
 												</div>
-											</div>
-										)}
+											)}
 										{/* Dynamic Facts */}
-										{profileData?.profile.dynamic && profileData.profile.dynamic.length > 0 && (
-											<div className="profile-subsection">
-												<div className="subsection-label">Dynamic</div>
-												<div className="profile-facts">
-													{profileData.profile.dynamic.map((fact, idx) => (
-														<div key={`dynamic-${idx}`} className="profile-fact dynamic">
-															{fact}
-														</div>
-													))}
+										{profileData?.profile.dynamic &&
+											profileData.profile.dynamic.length > 0 && (
+												<div className="profile-subsection">
+													<div className="subsection-label">Dynamic</div>
+													<div className="profile-facts">
+														{profileData.profile.dynamic.map((fact, idx) => (
+															<div
+																className="profile-fact dynamic"
+																key={`dynamic-${idx}`}
+															>
+																{fact}
+															</div>
+														))}
+													</div>
 												</div>
-											</div>
-										)}
-										{(!profileData?.profile.static?.length && !profileData?.profile.dynamic?.length) && (
-											<div className="empty-section">
-												<span>No profile data yet</span>
-											</div>
-										)}
+											)}
+										{!profileData?.profile.static?.length &&
+											!profileData?.profile.dynamic?.length && (
+												<div className="empty-section">
+													<span>No profile data yet</span>
+												</div>
+											)}
 									</div>
 								</div>
 
@@ -654,7 +720,7 @@ export default function VoiceApp() {
 									{sessionDocs.length > 0 ? (
 										<div className="session-docs">
 											{sessionDocs.map((doc) => (
-												<div key={doc.id} className="session-doc">
+												<div className="session-doc" key={doc.id}>
 													<div className="session-doc-title">{doc.title}</div>
 													<div className="session-doc-time">
 														{formatRelativeTime(doc.createdAt)}
@@ -687,12 +753,17 @@ export default function VoiceApp() {
 								</div>
 							)}
 
-							{documentsData && documentsData.documents.length === 0 && !isLoadingGraph && (
-								<div className="empty-state">
-									<span>No documents found</span>
-									<span>Start chatting to create documents and see them visualized here</span>
-								</div>
-							)}
+							{documentsData &&
+								documentsData.documents.length === 0 &&
+								!isLoadingGraph && (
+									<div className="empty-state">
+										<span>No documents found</span>
+										<span>
+											Start chatting to create documents and see them visualized
+											here
+										</span>
+									</div>
+								)}
 
 							{documentsData && documentsData.documents.length > 0 && (
 								<div className="graph-wrapper">
@@ -706,7 +777,6 @@ export default function VoiceApp() {
 							)}
 						</div>
 					)}
-
 				</div>
 			</div>
 		</div>
