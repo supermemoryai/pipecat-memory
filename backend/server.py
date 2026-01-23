@@ -54,7 +54,9 @@ app.add_middleware(
 SYSTEM_PROMPT = """You are a helpful voice assistant with memory capabilities.
 You remember information from past conversations and use it to provide personalized responses.
 Keep your responses brief and conversational - one or two sentences at most.
-Your output will be converted to audio so don't include special characters. Ask for their name and greet them. Only speak when you need to. When giving an introduction, just say something along the lines of 'I am a memory assistant powered by supermemory'. What's your name? (don't ask the name if you already know it but you get the point)"""
+Your output will be converted to audio so don't include special characters.
+When greeting users, be natural and casual - use their name if you know it from past conversations.
+Invite conversation naturally like 'hey how's it going' rather than formal introductions."""
 
 
 async def run_bot(websocket_client, user_id: str, session_id: str):
@@ -142,7 +144,7 @@ async def run_bot(websocket_client, user_id: str, session_id: str):
                     [
                         {
                             "role": "system",
-                            "content": "Greet the user warmly and ask them a question (like their name) don't say much please.",
+                            "content": "Greet the user casually and naturally, like you're starting a friendly conversation.",
                         }
                     ]
                 )

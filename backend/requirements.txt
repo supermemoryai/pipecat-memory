@@ -5,4 +5,4 @@ python-dotenv
 loguru
 pipecat-ai[google,silero]
 protobuf
-supermemory-pipecat>=0.1.0
+supermemory-pipecat>=0.1.1
